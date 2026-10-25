@@ -25,8 +25,14 @@ typedef void (*TDRenderDisplayFn)(void *server, CFStringRef display,
                                   void *surface, int x, int y);
 
 // 更简单的私有入口，UIKit 内部就是用它转 IOSurface -> UIImage。
-// 部分系统版本上可能不存在，所以用弱链接，取不到时回退到 CARenderServerRenderDisplay。
-extern UIImage *_Nullable _UICreateScreenUIImage(void) __attribute__((weak_import));
+// C 符号，必须用 extern "C" 包住，否则 .mm 里会按 C++ 名字修饰去找。
+#ifdef __cplusplus
+extern "C" {
+#endif
+UIImage *_Nullable _UICreateScreenUIImage(void);
+#ifdef __cplusplus
+}
+#endif
 
 #pragma mark - 悬浮窗
 
