@@ -391,6 +391,9 @@ static NSInteger TDParseRemaining(NSString *text)
 
     CGSize fb = [self screenFramebufferSize];
     size_t w = (size_t)fb.width, h = (size_t)fb.height;
+    // SSH 直跑没有 UIApplication，UIScreen 可能拿不到 —— 回退到 SE2 固定值
+    if (w < 1 || h < 1) { w = 750; h = 1334; }
+    [out appendFormat:@"framebuffer=%zux%zu\n", w, h];
     size_t bpr = (w * 4 + 63) & ~(size_t)63;
     NSDictionary *props = @{
         @"IOSurfaceIsGlobal": @YES,
@@ -423,7 +426,7 @@ static NSInteger TDParseRemaining(NSString *text)
                 @"IOSurfacePixelFormat": @(0x42475241),
                 @"IOSurfaceAllocSize": @(w * 4 * h),
             };
-            narrow = td_surface_create((__bridge CFDictionaryRef)props);
+            narrow = td_surface_create((__bridge CFDictionaryRef)nprops);
             if (!narrow) { [out appendFormat:@"变体%d: 3000行宽surface创建失败\n", v + 1]; continue; }
             target = narrow;
         }
