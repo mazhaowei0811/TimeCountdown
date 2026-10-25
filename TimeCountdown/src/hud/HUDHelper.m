@@ -16,7 +16,45 @@ extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t *attrp, uid_t 
 extern int posix_spawnattr_set_persona_uid_np(const posix_spawnattr_t *attrp, uid_t persona_uid);
 extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *attrp, uid_t persona_gid);
 
-/// 用自己这个可执行文件重新起一个进程，带指定参数。
+/// 把自己拷到容器外的稳定路径再 spawn —— App 容器内的进程可能被设备上的
+/// 注入框架（MATweakEx 等）拦截挂死，容器外同字节二进制可正常运行。
+static char *TDResolveSpawnPath(void)
+{
+    uint32_t size = 0;
+    _NSGetExecutablePath(NULL, &size);
+    char *selfBuf = (char *)calloc(1, size);
+    _NSGetExecutablePath(selfBuf, &size);
+    NSString *selfPath = [NSString stringWithUTF8String:selfBuf];
+    free(selfBuf);
+
+    NSString *dir = @"/var/tmp/td-hud";
+    NSString *dest = [dir stringByAppendingPathComponent:@"TimeCountdown"];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSDictionary *srcAttr = [fm attributesOfItemAtPath:selfPath error:nil];
+    NSDictionary *dstAttr = [fm attributesOfItemAtPath:dest error:nil];
+    BOOL needCopy = YES;
+    if (srcAttr && dstAttr &&
+        [srcAttr[NSFileSize] unsignedLongLongValue] == [dstAttr[NSFileSize] unsignedLongLongValue])
+        needCopy = NO;   // 同大小即视为已同步（二进制由 CI 出包，内容随版本变化）
+
+    if (needCopy) {
+        [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+        [fm removeItemAtPath:dest error:nil];
+        NSString *plistDest = [dir stringByAppendingPathComponent:@"Info.plist"];
+        [fm removeItemAtPath:plistDest error:nil];
+        NSString *plistSrc = [[selfPath stringByDeletingLastPathComponent]
+                              stringByAppendingPathComponent:@"Info.plist"];
+        if ([fm copyItemAtPath:selfPath toPath:dest error:nil])
+            chmod(dest.UTF8String, 0755);
+        if ([fm fileExistsAtPath:plistSrc])
+            [fm copyItemAtPath:plistSrc toPath:plistDest error:nil];
+    }
+    if ([fm isExecutableFileAtPath:dest])
+        return strdup(dest.UTF8String);
+    return strdup(selfPath.UTF8String);   // 拷贝失败就退回原路径
+}
+
+/// 用指定可执行文件起一个进程，带指定参数。
 /// persona 设为 0:0 + OVERRIDE，配合 com.apple.private.persona-mgmt
 /// 权限，子进程就是以 root 跑的 —— 截屏和挂悬浮窗都需要这个身份。
 static pid_t TDSpawnSelf(const char *arg, BOOL newProcessGroup, int *outStatus)
@@ -24,10 +62,7 @@ static pid_t TDSpawnSelf(const char *arg, BOOL newProcessGroup, int *outStatus)
     static char *executablePath = NULL;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        uint32_t size = 0;
-        _NSGetExecutablePath(NULL, &size);
-        executablePath = (char *)calloc(1, size);
-        _NSGetExecutablePath(executablePath, &size);
+        executablePath = TDResolveSpawnPath();
     });
 
     posix_spawnattr_t attr;
