@@ -420,6 +420,52 @@ static NSInteger TDParseRemaining(NSString *text)
     // SSH 直跑没有 UIApplication，UIScreen 可能拿不到 —— 回退到 SE2 固定值
     if (w < 1 || h < 1) { w = 750; h = 1334; }
     [out appendFormat:@"framebuffer=%zux%zu\n", w, h];
+
+    // IOMobileFramebuffer 直读测试（当前主攻方案，放最前面避免被 surface 失败短路）
+    {
+        if (TDLoadFramebufferSymbols()) {
+            CFTimeInterval tf0 = CACurrentMediaTime();
+            CGImageRef fbImg = [self captureFramebuffer];
+            double tfms = (CACurrentMediaTime() - tf0) * 1000.0;
+            if (fbImg) {
+                size_t fw = CGImageGetWidth(fbImg), fh = CGImageGetHeight(fbImg);
+                CGContextRef bc = CGBitmapContextCreate(NULL, fw, fh, 8, fw * 4,
+                                                        CGImageGetColorSpace(fbImg),
+                                                        kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+                size_t lit = 0, sampled = 0;
+                if (bc) {
+                    CGContextDrawImage(bc, CGRectMake(0, 0, fw, fh), fbImg);
+                    const uint8_t *px = (const uint8_t *)CGBitmapContextGetData(bc);
+                    size_t n = fw * fh * 4;
+                    for (size_t i = 0; i + 3 < n; i += 16) {
+                        sampled++;
+                        if (px[i] > 28 || px[i+1] > 28 || px[i+2] > 28) lit++;
+                    }
+                    CGContextRelease(bc);
+                }
+                [out appendFormat:@"IOMFB直读: 成功 %.0fx%.0f 耗时%.0fms 亮像素%lu/%lu\n",
+                     (double)fw, (double)fh, tfms, (unsigned long)lit, (unsigned long)sampled];
+                NSString *path = @"/var/root/Library/Caches/probe_iomfb.png";
+                UIGraphicsBeginImageContextWithOptions(CGSizeMake(fw, fh), NO, 1.0);
+                CGContextRef c2 = UIGraphicsGetCurrentContext();
+                if (c2) CGContextDrawImage(c2, CGRectMake(0, 0, fw, fh), fbImg);
+                UIImage *im2 = UIGraphicsGetImageFromCurrentImageContext();
+                UIGraphicsEndImageContext();
+                if (im2) {
+                    NSData *png2 = UIImagePNGRepresentation(im2);
+                    [png2 writeToFile:path atomically:YES];
+                    chmod([path UTF8String], 0666);
+                    [out appendFormat:@"已保存 IOMFB 整屏图到 %@\n", path];
+                }
+                CGImageRelease(fbImg);
+            } else {
+                [out appendFormat:@"IOMFB直读: 失败（耗时%.0fms）\n", tfms];
+            }
+        } else {
+            [out appendString:@"IOMFB直读: 符号加载失败\n"];
+        }
+    }
+
     size_t bpr = (w * 4 + 63) & ~(size_t)63;
     NSDictionary *props = @{
         @"IOSurfaceIsGlobal": @YES,
@@ -532,50 +578,6 @@ static NSInteger TDParseRemaining(NSString *text)
         }
     } else {
         [out appendString:@"_UICreateScreenUIImage: 符号不存在\n"];
-    }
-
-    // IOMobileFramebuffer 直读测试（当前主攻方案）
-    if (TDLoadFramebufferSymbols()) {
-        CFTimeInterval tf0 = CACurrentMediaTime();
-        CGImageRef fbImg = [self captureFramebuffer];
-        double tfms = (CACurrentMediaTime() - tf0) * 1000.0;
-        if (fbImg) {
-            size_t fw = CGImageGetWidth(fbImg), fh = CGImageGetHeight(fbImg);
-            // 统计亮像素
-            CGContextRef bc = CGBitmapContextCreate(NULL, fw, fh, 8, fw * 4,
-                                                    CGImageGetColorSpace(fbImg),
-                                                    kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
-            size_t lit = 0, sampled = 0;
-            if (bc) {
-                CGContextDrawImage(bc, CGRectMake(0, 0, fw, fh), fbImg);
-                const uint8_t *px = (const uint8_t *)CGBitmapContextGetData(bc);
-                size_t n = fw * fh * 4;
-                for (size_t i = 0; i + 3 < n; i += 16) {
-                    sampled++;
-                    if (px[i] > 28 || px[i+1] > 28 || px[i+2] > 28) lit++;
-                }
-                CGContextRelease(bc);
-            }
-            [out appendFormat:@"IOMFB直读: 成功 %.0fx%.0f 耗时%.0fms 亮像素%lu/%lu\n",
-                 (double)fw, (double)fh, tfms, (unsigned long)lit, (unsigned long)sampled];
-            NSString *path = @"/var/root/Library/Caches/probe_iomfb.png";
-            UIGraphicsBeginImageContextWithOptions(CGSizeMake(fw, fh), NO, 1.0);
-            CGContextRef c2 = UIGraphicsGetCurrentContext();
-            if (c2) CGContextDrawImage(c2, CGRectMake(0, 0, fw, fh), fbImg);
-            UIImage *im2 = UIGraphicsGetImageFromCurrentImageContext();
-            UIGraphicsEndImageContext();
-            if (im2) {
-                NSData *png2 = UIImagePNGRepresentation(im2);
-                [png2 writeToFile:path atomically:YES];
-                chmod([path UTF8String], 0666);
-                [out appendFormat:@"已保存 IOMFB 整屏图到 %@\n", path];
-            }
-            CGImageRelease(fbImg);
-        } else {
-            [out appendFormat:@"IOMFB直读: 失败（耗时%.0fms）\n", tfms];
-        }
-    } else {
-        [out appendString:@"IOMFB直读: 符号加载失败\n"];
     }
     return out;
 }
