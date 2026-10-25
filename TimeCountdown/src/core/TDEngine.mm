@@ -628,8 +628,8 @@ static NSInteger TDParseRemaining(NSString *text)
             mainDisplay = (void *)td_iosvc_get(0, td_iosvc_match("IOMobileFramebuffer"));
     }
     static BOOL stepLogged = NO;
-    if (gm != 0 || !mainDisplay) {
-        if (!stepLogged) { stepLogged = YES; TDLog(@"IOMFB GetMainDisplay 失败 ret=%d p=%p", gm, mainDisplay); }
+    if (!mainDisplay) {
+        if (!stepLogged) { stepLogged = YES; TDLog(@"IOMFB 主显示获取失败 ret=%d", gm); }
         return NULL;
     }
 
