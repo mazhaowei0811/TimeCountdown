@@ -1,0 +1,31 @@
+#if __has_include(<AvailabilityVersions.h>)
+    #import <AvailabilityVersions.h>
+#endif
+
+#ifdef __OBJC__
+    #if __has_include(<TargetConditionals.h>)
+        #import <TargetConditionals.h>
+    #endif
+
+    #import <Foundation/Foundation.h>
+    #import <UIKit/UIKit.h>
+    #import <CoreGraphics/CoreGraphics.h>
+    #import <os/log.h>
+#endif
+
+#define TD_BUNDLE_ID    "com.tp2.timecountdown"
+
+// 主 App 与 HUD 进程共享的配置（两边都用绝对路径读写，绕开沙盒差异）
+#define TD_PREFS_PATH   @"/var/mobile/Library/Preferences/com.tp2.timecountdown.plist"
+
+// 运行日志。同样用绝对路径 —— HUD 以 root 跑，它眼里的
+// NSSearchPathForDirectoriesInDomains 并不是主 App 的沙盒目录，
+// 用相对路径两边会写到不同的文件里去。
+#define TD_LOG_PATH     @"/var/mobile/Library/Preferences/com.tp2.timecountdown.log"
+
+// HUD -> App：HUD 已经起来了
+#define NOTIFY_LAUNCHED_HUD  "com.tp2.timecountdown.notification.hud.launched"
+// App -> HUD：让 HUD 退出
+#define NOTIFY_DISMISSAL_HUD "com.tp2.timecountdown.notification.hud.dismissal"
+// App -> HUD：配置变了，重新加载
+#define NOTIFY_RELOAD_HUD    "com.tp2.timecountdown.notification.hud.reload"

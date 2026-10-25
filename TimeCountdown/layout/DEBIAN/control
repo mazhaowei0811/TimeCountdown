@@ -1,0 +1,9 @@
+Package: com.tp2.timecountdown
+Name: TimeCountdown
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: 悬浮窗实时显示屏幕上倒计时（TrollStore 应用）
+Maintainer: tp2
+Author: tp2
+Section: Applications
+Depends: firmware (>= 14.0)

@@ -1,0 +1,121 @@
+name: Build TimeCountdown IPA
+
+on:
+  push:
+    branches: [ main ]
+    # 注意：只写 branches 的话 tag 推送不会触发；而 paths 过滤器不对 tag 生效，
+    # 所以 tags 和 paths 可以共存。
+    tags: [ 'v*' ]
+    paths:
+      - 'TimeCountdown/**'
+      - '.github/workflows/timecountdown.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install ldid
+        run: brew install ldid
+
+      - name: Setup Theos
+        run: |
+          set -e
+          git clone --recursive --depth 1 https://github.com/theos/theos.git "$HOME/theos"
+          echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
+          echo "$HOME/theos/bin" >> "$GITHUB_PATH"
+
+      - name: Sync version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -e
+          V="${GITHUB_REF_NAME#v}"
+          echo "$V" | grep -qE '^[0-9]+(\.[0-9]+)*$' || { echo "标签版本号格式非法: $V"; exit 1; }
+          echo "tag = $GITHUB_REF_NAME  ->  version = $V"
+          python3 - <<PY
+          import re
+          p = "TimeCountdown/layout/Applications/TimeCountdown.app/Info.plist"
+          s = open(p, encoding="utf-8").read()
+          s = re.sub(r"(<key>CFBundleShortVersionString</key>\s*<string>)[^<]*(</string>)",
+                     r"\g<1>${V}\g<2>", s)
+          s = re.sub(r"(<key>CFBundleVersion</key>\s*<string>)[^<]*(</string>)",
+                     r"\g<1>${GITHUB_RUN_NUMBER}\g<2>", s)
+          open(p, "w", encoding="utf-8", newline="\n").write(s)
+          PY
+          grep -A1 -E 'CFBundle(Short)?Version' TimeCountdown/layout/Applications/TimeCountdown.app/Info.plist
+
+      - name: Build IPA
+        run: |
+          set -e
+          cd TimeCountdown
+          chmod +x ipabuild.sh
+          ./ipabuild.sh
+          ls -la build/
+
+      - name: Verify app bundle
+        run: |
+          set -e
+          cd TimeCountdown
+          rm -rf /tmp/verify && mkdir -p /tmp/verify
+          unzip -q -o build/TimeCountdown.tipa -d /tmp/verify
+          APP=/tmp/verify/Payload/TimeCountdown.app
+          echo "== 产物 =="
+          ls -la "$APP"
+          echo
+          echo "== Info.plist 必需字段 =="
+          FAIL=0
+          for k in CFBundleIdentifier CFBundleExecutable CFBundleName CFBundlePackageType \
+                   CFBundleShortVersionString CFBundleVersion MinimumOSVersion UIDeviceFamily \
+                   CFBundleSupportedPlatforms CFBundleIconFile NSPrincipalClass; do
+            if /usr/libexec/PlistBuddy -c "Print :$k" "$APP/Info.plist" >/dev/null 2>&1; then
+              printf '  %-30s OK   %s\n' "$k" "$(/usr/libexec/PlistBuddy -c "Print :$k" "$APP/Info.plist" | tr -d '\n')"
+            else
+              printf '  %-30s <<< 缺失\n' "$k"
+              FAIL=1
+            fi
+          done
+          [ "$FAIL" = "0" ] || { echo "Info.plist 缺字段，构建失败"; exit 1; }
+          echo
+          echo "== 架构 =="
+          lipo -info "$APP/TimeCountdown"
+          echo
+          echo "== entitlements（关键几项）=="
+          ldid -e "$APP/TimeCountdown" > /tmp/ent.plist
+          for k in com.apple.private.persona-mgmt com.apple.private.security.no-sandbox \
+                   platform-application com.apple.springboard.accessibility-window-hosting \
+                   com.apple.security.iokit-user-client-class run-unsigned-code; do
+            if /usr/libexec/PlistBuddy -c "Print :$k" /tmp/ent.plist >/dev/null 2>&1; then
+              printf '  %-56s OK\n' "$k"
+            else
+              printf '  %-56s <<< 缺失\n' "$k"
+              FAIL=1
+            fi
+          done
+          [ "$FAIL" = "0" ] || { echo "entitlements 缺项，构建失败"; exit 1; }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TimeCountdown-ipa
+          path: TimeCountdown/build/TimeCountdown.tipa
+
+      - name: Publish to Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: TimeCountdown ${{ github.ref_name }}
+          files: TimeCountdown/build/TimeCountdown.tipa
+          body: |
+            ### TimeCountdown —— 悬浮窗实时显示屏幕上的倒计时
+
+            | 文件 | 说明 |
+            | --- | --- |
+            | `TimeCountdown.tipa` | 用 **TrollStore** 安装 |
+
+            首次使用：先点「测试识别」确认坐标能截对，再「启动悬浮窗」。
