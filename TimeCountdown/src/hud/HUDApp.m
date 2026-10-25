@@ -41,6 +41,7 @@
 
 static BOOL gTDTestMode = NO;
 static BOOL gTDProbeMode = NO;
+static BOOL gTDProbe3Mode = NO;
 
 #pragma mark - 私有符号的运行时解析
 //
@@ -443,6 +444,14 @@ static void TDLoadPrivateSymbols(void)
         [self runProbeAndExit];
         return YES;
     }
+    if (gTDProbe3Mode) {
+        TDLog(@"=== 截屏探针开始（UIKit 环境内）===");
+        NSString *report = [[TDEngine shared] probeCaptureReport];
+        for (NSString *line in [report componentsSeparatedByString:@"\n"])
+            if (line.length) TDLog(@"探针 %@", line);
+        TDLog(@"=== 截屏探针结束 ===");
+        exit(0);
+    }
 
     // 这一步必须在 objc_getClass("SBSAccessibilityWindowHostingController") 之前，
     // 那个类只有 SpringBoardServices 被 dlopen 之后才存在
@@ -484,7 +493,7 @@ static int TDRunHUD(void)
     int streak = TDBootGuardTick(120.0);
     TDLog(@"—— HUD 启动 pid=%d 连续第 %d 次（%s）",
           pid, streak, gTDProbeMode ? "probe" : "hud");
-    if (!gTDProbeMode && streak > 3) {
+    if (!gTDProbeMode && !gTDProbe3Mode && streak > 3) {
         TDLog(@"连续启动 %d 次，判定为崩溃循环 —— 本次不建窗口、不注册，直接退出。"
               @"请重启设备后在 App 里点「启动悬浮窗」重试。", streak);
         exit(0);
@@ -492,7 +501,7 @@ static int TDRunHUD(void)
 
     // 诊断进程不写 pid 文件 —— 它不是常驻的悬浮窗，
     // 写了会让「悬浮窗是否在运行」的判断出现十几秒的假阳性
-    if (!gTDProbeMode)
+    if (!gTDProbeMode && !gTDProbe3Mode)
         TDWritePIDFile(pid);
 
     TDLoadPrivateSymbols();
@@ -576,12 +585,8 @@ static int TDCheckHUD(void)
 
 static void TDRunProbe3(void)
 {
-    TDLog(@"=== 截屏探针开始 ===");
-    NSString *report = [[TDEngine shared] probeCaptureReport];
-    for (NSString *line in [report componentsSeparatedByString:@"\n"])
-        if (line.length) TDLog(@"探针 %@", line);
-    TDLog(@"=== 截屏探针结束 ===");
-    exit(0);
+    // 探针已改为在 UIKit 环境内执行（gTDProbe3Mode），
+    // 独立进程里 IOSurface 创建会失败，结果不可信。
 }
 
 int main(int argc, char *argv[])
@@ -596,8 +601,10 @@ int main(int argc, char *argv[])
             gTDProbeMode = YES;
             return TDRunHUD();
         }
-        if (strcmp(argv[1], "-probe3") == 0)
-            TDRunProbe3();
+        if (strcmp(argv[1], "-probe3") == 0) {
+            gTDProbe3Mode = YES;
+            return TDRunHUD();
+        }
         if (strcmp(argv[1], "-test") == 0) {
             gTDTestMode = YES;
             return TDRunHUD();
