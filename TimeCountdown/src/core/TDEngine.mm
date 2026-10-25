@@ -31,6 +31,7 @@ static int   (*td_iomfb_getmain)(void **) = NULL;
 static int   (*td_iomfb_open)(void *, void *, unsigned int, void **) = NULL;
 static int   (*td_iomfb_getlayer)(void *, int, void **) = NULL;
 static bool  td_iomfb_ready = false;
+static TDIOSurfaceRef (*td_surface_lookup)(uint32_t) = NULL;
 
 static bool TDLoadFramebufferSymbols(void)
 {
@@ -71,6 +72,7 @@ static bool TDLoadSurfaceSymbols(void)
             td_surface_base   = (void *(*)(TDIOSurfaceRef))dlsym(h, "IOSurfaceGetBaseAddress");
             td_surface_w      = (size_t (*)(TDIOSurfaceRef))dlsym(h, "IOSurfaceGetWidth");
             td_surface_h      = (size_t (*)(TDIOSurfaceRef))dlsym(h, "IOSurfaceGetHeight");
+            td_surface_lookup = (TDIOSurfaceRef (*)(uint32_t))dlsym(h, "IOSurfaceLookup");
         }
 
         // CARenderServerRenderDisplay 在 QuartzCore 里，QuartzCore 是链接进来的，
@@ -609,64 +611,99 @@ static NSInteger TDParseRemaining(NSString *text)
 {
     if (!TDLoadFramebufferSymbols())
         return NULL;
+    TDLoadSurfaceSymbols();
 
-    void *mainDisplay = NULL;
-    int gm = td_iomfb_getmain(&mainDisplay);
-    if (gm != 0 || !mainDisplay) {
-        // 兜底：IOKit 直接找 IOMobileFramebuffer 服务
-        static void *iok = NULL;
-        static mach_port_t (*td_iosvc_get)(mach_port_t, void *) = NULL;
-        static void *(*td_iosvc_match)(const char *) = NULL;
-        static dispatch_once_t onceIO;
-        dispatch_once(&onceIO, ^{
-            iok = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY | RTLD_LOCAL);
-            if (!iok) return;
-            td_iosvc_get   = (mach_port_t (*)(mach_port_t, void *))dlsym(iok, "IOServiceGetMatchingService");
-            td_iosvc_match = (void *(*)(const char *))dlsym(iok, "IOServiceMatching");
-        });
-        if (iok && td_iosvc_get && td_iosvc_match)
-            mainDisplay = (void *)td_iosvc_get(0, td_iosvc_match("IOMobileFramebuffer"));
-    }
-    static BOOL stepLogged = NO;
-    if (!mainDisplay) {
-        if (!stepLogged) { stepLogged = YES; TDLog(@"IOMFB 主显示获取失败 ret=%d", gm); }
-        return NULL;
-    }
+    // ---- 解析显示服务并建立连接（进程内只做一次）----
+    static dispatch_once_t onceOpen;
+    static void *conn = NULL;                 // IOMFB / IOService 连接
+    static void *svcA = NULL, *svcB = NULL;   // IORegistry 服务（注册表兜底用）
+    static int openErr = 0;
+    static NSString *openStage = nil;
+    static mach_port_t (*td_io_open)(void *, void *, unsigned int, void **) = NULL;
+    static kern_return_t (*td_io_release)(void *) = NULL;
+    static CFTypeRef (*td_io_prop)(void *, CFStringRef, CFAllocatorRef, uint32_t) = NULL;
+    static mach_port_t (*td_iosvc_get)(mach_port_t, void *) = NULL;
+    static void *(*td_iosvc_match)(const char *) = NULL;
+    dispatch_once(&onceOpen, ^{
+        void *iok = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY | RTLD_LOCAL);
+        if (iok) {
+            td_iosvc_get  = (mach_port_t (*)(mach_port_t, void *))dlsym(iok, "IOServiceGetMatchingService");
+            td_iosvc_match= (void *(*)(const char *))dlsym(iok, "IOServiceMatching");
+            td_io_open    = (mach_port_t (*)(void *, void *, unsigned int, void **))dlsym(iok, "IOServiceOpen");
+            td_io_release = (kern_return_t (*)(void *))dlsym(iok, "IOObjectRelease");
+            td_io_prop    = (CFTypeRef (*)(void *, CFStringRef, CFAllocatorRef, uint32_t))dlsym(iok, "IORegistryEntryCreateCFProperty");
+        }
 
-    static void *conn = NULL;
-    static dispatch_once_t once;
-    static int openRet = 0;
-    dispatch_once(&once, ^{
-        openRet = td_iomfb_open(mainDisplay, (void *)(uintptr_t)mach_task_self(), 0, &conn);
-        if (openRet != 0) {
-            // 试试换服务名
-            static void *iok2 = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY | RTLD_LOCAL);
-            if (iok2) {
-                mach_port_t (*svcGet)(mach_port_t, void *) =
-                    (mach_port_t (*)(mach_port_t, void *))dlsym(iok2, "IOServiceGetMatchingService");
-                void *(*svcMatch)(const char *) = (void *(*)(const char *))dlsym(iok2, "IOServiceMatching");
-                if (svcGet && svcMatch) {
-                    void *clcd = (void *)svcGet(0, svcMatch("AppleCLCD"));
-                    if (clcd)
-                        openRet = td_iomfb_open(clcd, (void *)(uintptr_t)mach_task_self(), 0, &conn);
+        int gm = td_iomfb_getmain(&svcA);
+        if (gm != 0 || !svcA) {
+            svcA = NULL;
+            if (td_iosvc_get && td_iosvc_match)
+                svcA = (void *)td_iosvc_get(0, td_iosvc_match("IOMobileFramebuffer"));
+        }
+        if (td_iosvc_get && td_iosvc_match)
+            svcB = (void *)td_iosvc_get(0, td_iosvc_match("AppleCLCD"));
+        void *svcs[2] = { svcA, svcB };
+
+        // 路径 1：IOMobileFramebufferOpen（先 IOMFB 服务再 AppleCLCD）
+        for (int i = 0; i < 2 && !conn; i++) {
+            if (!svcs[i]) continue;
+            openErr = td_iomfb_open(svcs[i], (void *)(uintptr_t)mach_task_self(), 0, &conn);
+            if (openErr != 0)
+                conn = NULL;
+            else
+                openStage = [NSString stringWithFormat:@"IOMobileFramebufferOpen svc=%d", i];
+        }
+        // 路径 2：绕过封装，直接 IOServiceOpen（试 type 0/1/2）
+        if (!conn && td_io_open) {
+            for (int i = 0; i < 2 && !conn; i++) {
+                if (!svcs[i]) continue;
+                for (unsigned int t = 0; t < 3 && !conn; t++) {
+                    openErr = (int)td_io_open(svcs[i], (void *)(uintptr_t)mach_task_self(), t, &conn);
+                    if (openErr != 0)
+                        conn = NULL;
+                    else
+                        openStage = [NSString stringWithFormat:@"IOServiceOpen svc=%d type=%u", i, t];
                 }
             }
         }
-        if (openRet != 0)
-            conn = NULL;
+        if (!conn)
+            openStage = [NSString stringWithFormat:@"全部打开失败 ret=0x%x", openErr];
+        TDLog(@"IOMFB 连接：%@（svcA=%p svcB=%p）", openStage, svcA, svcB);
     });
-    if (!conn) {
-        if (!stepLogged) { stepLogged = YES; TDLog(@"IOMFB Open 失败 ret=0x%x", openRet); }
+    if (!conn)
         return NULL;
-    }
 
-    void *surf = NULL;
-    int gl = td_iomfb_getlayer(conn, 0, &surf);
-    if (gl != 0 || !surf) {
-        if (!stepLogged) { stepLogged = YES; TDLog(@"IOMFB GetLayerDefaultSurface 失败 ret=%d", gl); }
+    TDIOSurfaceRef s = NULL;
+    if (conn && td_iomfb_getlayer) {
+        void *surf = NULL;
+        int gl = td_iomfb_getlayer(conn, 0, &surf);
+        if (gl == 0 && surf)
+            s = (TDIOSurfaceRef)surf;
+    }
+    if (!s && td_surface_lookup && td_io_prop) {
+        // 注册表兜底：读帧缓冲 surface 的 IOSurfaceID，再 IOSurfaceLookup
+        static BOOL loggedReg = NO;
+        void *svcs[2] = { svcA, svcB };
+        for (int i = 0; i < 2 && !s; i++) {
+            if (!svcs[i]) continue;
+            CFTypeRef v = td_io_prop(svcs[i], CFSTR("IOSurfaceID"), NULL, 0);
+            if (!v) continue;
+            uint32_t sid = 0;
+            if (CFGetTypeID(v) == CFNumberGetTypeID())
+                CFNumberGetValue((CFNumberRef)v, kCFNumberSInt32Type, &sid);
+            CFRelease(v);
+            if (sid) {
+                s = td_surface_lookup(sid);
+                if (s && !loggedReg) { loggedReg = YES; TDLog(@"IOSurfaceID 兜底命中 svc=%d id=%u", i, sid); }
+            }
+        }
+        if (!s && !loggedReg) { loggedReg = YES; TDLog(@"IOSurfaceID 兜底未命中（注册表无该属性）"); }
+    }
+    if (!s) {
+        static BOOL loggedFail = NO;
+        if (!loggedFail) { loggedFail = YES; TDLog(@"IOMFB 取 surface 失败：%@", openStage ?: @"未知"); }
         return NULL;
     }
-    TDIOSurfaceRef s = (TDIOSurfaceRef)surf;
 
     size_t w = td_surface_w ? td_surface_w(s) : 0;
     size_t h = td_surface_h ? td_surface_h(s) : 0;
