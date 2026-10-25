@@ -612,6 +612,21 @@ static NSInteger TDParseRemaining(NSString *text)
 
     void *mainDisplay = NULL;
     int gm = td_iomfb_getmain(&mainDisplay);
+    if (gm != 0 || !mainDisplay) {
+        // 兜底：IOKit 直接找 IOMobileFramebuffer 服务
+        static void *iok = NULL;
+        static mach_port_t (*td_iosvc_get)(mach_port_t, void *) = NULL;
+        static void *(*td_iosvc_match)(const char *) = NULL;
+        static dispatch_once_t onceIO;
+        dispatch_once(&onceIO, ^{
+            iok = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY | RTLD_LOCAL);
+            if (!iok) return;
+            td_iosvc_get   = (mach_port_t (*)(mach_port_t, void *))dlsym(iok, "IOServiceGetMatchingService");
+            td_iosvc_match = (void *(*)(const char *))dlsym(iok, "IOServiceMatching");
+        });
+        if (iok && td_iosvc_get && td_iosvc_match)
+            mainDisplay = (void *)td_iosvc_get(0, td_iosvc_match("IOMobileFramebuffer"));
+    }
     static BOOL stepLogged = NO;
     if (gm != 0 || !mainDisplay) {
         if (!stepLogged) { stepLogged = YES; TDLog(@"IOMFB GetMainDisplay 失败 ret=%d p=%p", gm, mainDisplay); }
