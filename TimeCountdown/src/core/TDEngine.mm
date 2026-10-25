@@ -316,6 +316,22 @@ static NSInteger TDParseRemaining(NSString *text)
     size_t w = (size_t)fb.width, h = (size_t)fb.height;
     if (w < 1 || h < 1) return NULL;
 
+    // 首选：IOMobileFramebuffer 直读屏幕合成 surface。
+    // 必须放在 CARenderServerRenderDisplay 之前 —— 那个调用在本机上
+    // 输出全黑，而且之后整个进程的 IOSurfaceCreate 都会开始失败
+    //（疑似被渲染服务器拉黑），所以一次都不要先调它。
+    static int fbTried = 0;
+    if (fbTried < 3) {
+        fbTried++;
+        CGImageRef fbImg = [self captureFramebuffer];
+        if (fbImg) {
+            static BOOL logged = NO;
+            if (!logged) { logged = YES; TDLog(@"截屏改用 IOMobileFramebuffer 直读成功"); }
+            return fbImg;
+        }
+        TDLog(@"IOMFB 直读未成功（第 %d 次），回退渲染服务器路径", fbTried);
+    }
+
     // 复用 IOSurface，避免每帧都申请 4MB
     if (_surface && (_surfaceW != w || _surfaceH != h)) {
         CFRelease((CFTypeRef)_surface);
@@ -595,8 +611,12 @@ static NSInteger TDParseRemaining(NSString *text)
         return NULL;
 
     void *mainDisplay = NULL;
-    if (td_iomfb_getmain(&mainDisplay) != 0 || !mainDisplay)
+    int gm = td_iomfb_getmain(&mainDisplay);
+    static BOOL stepLogged = NO;
+    if (gm != 0 || !mainDisplay) {
+        if (!stepLogged) { stepLogged = YES; TDLog(@"IOMFB GetMainDisplay 失败 ret=%d p=%p", gm, mainDisplay); }
         return NULL;
+    }
 
     static void *conn = NULL;
     static dispatch_once_t once;
@@ -604,12 +624,17 @@ static NSInteger TDParseRemaining(NSString *text)
         if (td_iomfb_open(mainDisplay, (void *)(uintptr_t)mach_task_self(), 0, &conn) != 0)
             conn = NULL;
     });
-    if (!conn)
+    if (!conn) {
+        if (!stepLogged) { stepLogged = YES; TDLog(@"IOMFB Open 失败"); }
         return NULL;
+    }
 
     void *surf = NULL;
-    if (td_iomfb_getlayer(conn, 0, &surf) != 0 || !surf)
+    int gl = td_iomfb_getlayer(conn, 0, &surf);
+    if (gl != 0 || !surf) {
+        if (!stepLogged) { stepLogged = YES; TDLog(@"IOMFB GetLayerDefaultSurface 失败 ret=%d", gl); }
         return NULL;
+    }
     TDIOSurfaceRef s = (TDIOSurfaceRef)surf;
 
     size_t w = td_surface_w ? td_surface_w(s) : 0;
