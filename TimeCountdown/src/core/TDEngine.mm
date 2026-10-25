@@ -368,6 +368,13 @@ static NSInteger TDParseRemaining(NSString *text)
 
 - (TDResult *)recognizeRect:(CGRect)fbRect debugPath:(NSString *)debugPath
 {
+    return [self recognizeRect:fbRect debugPath:debugPath fullDebugPath:nil];
+}
+
+- (TDResult *)recognizeRect:(CGRect)fbRect
+                  debugPath:(NSString *)debugPath
+             fullDebugPath:(NSString *)fullDebugPath
+{
     TDResult *r = [[TDResult alloc] init];
     r.timestamp = [NSDate date].timeIntervalSince1970;
 
@@ -390,6 +397,27 @@ static NSInteger TDParseRemaining(NSString *text)
                     fbRect.origin.x, fbRect.origin.y, fbRect.size.width, fbRect.size.height,
                     fb.width, fb.height];
         return r;
+    }
+
+    // 自检用：把整张截图（带裁剪区域红框）落盘，方便肉眼校准坐标
+    if (fullDebugPath.length > 0) {
+        @try {
+            UIGraphicsBeginImageContextWithOptions(CGSizeMake(fb.width, fb.height), NO, 1.0);
+            CGContextRef ctx = UIGraphicsGetCurrentContext();
+            if (ctx) {
+                CGContextDrawImage(ctx, CGRectMake(0, 0, fb.width, fb.height), full);
+                CGContextSetStrokeColorWithColor(ctx, [UIColor redColor].CGColor);
+                CGContextSetLineWidth(ctx, 5.0);
+                CGContextStrokeRect(ctx, rc);
+                UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
+                NSData *png = UIImagePNGRepresentation(img);
+                [png writeToFile:fullDebugPath atomically:YES];
+                chmod([fullDebugPath UTF8String], 0666);
+            }
+            UIGraphicsEndImageContext();
+        } @catch (NSException *e) {
+            os_log_error(OS_LOG_DEFAULT, "[TD] 保存全屏调试图失败: %{public}@", e.reason);
+        }
     }
 
     CGImageRef cropped = CGImageCreateWithImageInRect(full, rc);

@@ -212,6 +212,7 @@ static void TDLoadPrivateSymbols(void)
 
     NSString *caches = [NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES) firstObject];
     NSString *debugPath = [caches stringByAppendingPathComponent:@"test_crop.png"];
+    NSString *fullDebugPath = [caches stringByAppendingPathComponent:@"test_full.png"];
 
     CGSize fb = [[TDEngine shared] screenFramebufferSize];
     CGRect fbRect = [cfg framebufferRectForCaptureSize:fb];
@@ -219,7 +220,7 @@ static void TDLoadPrivateSymbols(void)
     TDLog(@"自检：framebuffer %.0fx%.0f，裁剪 (%.0f, %.0f, %.0fx%.0f)",
           fb.width, fb.height, fbRect.origin.x, fbRect.origin.y, fbRect.size.width, fbRect.size.height);
 
-    TDResult *r = [[TDEngine shared] recognizeRect:fbRect debugPath:debugPath];
+    TDResult *r = [[TDEngine shared] recognizeRect:fbRect debugPath:debugPath fullDebugPath:fullDebugPath];
     TDLog(@"自检结果 status=%ld text=%@ 截屏 %.0fms OCR %.0fms",
           (long)r.status, r.text ?: @"", r.captureMs, r.ocrMs);
 
@@ -238,6 +239,7 @@ static void TDLoadPrivateSymbols(void)
         @"rectW": @(fbRect.size.width),
         @"rectH": @(fbRect.size.height),
         @"debugPath": debugPath,
+        @"fullDebugPath": fullDebugPath,
     };
 
     NSString *outPath = [caches stringByAppendingPathComponent:@"test_result.json"];
@@ -246,6 +248,8 @@ static void TDLoadPrivateSymbols(void)
     chmod([outPath UTF8String], 0666);
     if ([[NSFileManager defaultManager] fileExistsAtPath:debugPath])
         chmod([debugPath UTF8String], 0666);
+    if ([[NSFileManager defaultManager] fileExistsAtPath:fullDebugPath])
+        chmod([fullDebugPath UTF8String], 0666);
 
     exit(0);
 }

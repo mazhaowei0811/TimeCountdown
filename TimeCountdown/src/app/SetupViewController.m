@@ -596,7 +596,10 @@
     [s appendFormat:@"实际裁剪: (%.0f, %.0f) %.0f x %.0f\n",
         [res[@"rectX"] doubleValue], [res[@"rectY"] doubleValue],
         [res[@"rectW"] doubleValue], [res[@"rectH"] doubleValue]];
-    [s appendFormat:@"\n裁剪图: %@\n（在「文件」App 的本应用目录里可查看）", debugPath];
+    [s appendFormat:@"\n裁剪图: %@\n", debugPath];
+    [s appendFormat:@"全屏校准图: %@\n", res[@"fullDebugPath"] ?: @"（本版没有生成）"];
+    [s appendFormat:@"（都在「文件」App 的本应用目录里；全屏图上红框就是当前识别区域，"
+                    @"红框没套住倒计时文字就说明坐标要调）"];
 
     if (status == 2 || status == 3) {
         [s appendString:@"\n提示：先看裁剪图对不对。如果图截错了区域，"

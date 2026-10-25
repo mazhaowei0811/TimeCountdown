@@ -36,6 +36,11 @@ typedef NS_ENUM(NSInteger, TDStatus) {
 /// 截屏 -> 裁剪 -> 放大 -> OCR -> 解析。fbRect 是 framebuffer 坐标。
 - (TDResult *)recognizeRect:(CGRect)fbRect debugPath:(nullable NSString *)debugPath;
 
+/// 同上，另外把整张截图落盘到 fullDebugPath（裁剪区域会画上红框），用于校准坐标。
+- (TDResult *)recognizeRect:(CGRect)fbRect
+                  debugPath:(nullable NSString *)debugPath
+             fullDebugPath:(nullable NSString *)fullDebugPath;
+
 @end
 
 NS_ASSUME_NONNULL_END

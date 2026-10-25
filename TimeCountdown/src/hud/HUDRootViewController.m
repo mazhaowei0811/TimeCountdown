@@ -36,11 +36,14 @@ static void TDHandleLockStateChanged(CFNotificationCenterRef center,
     UIView *_container;
     UILabel *_timeLabel;
     UILabel *_statusLabel;
+    UIButton *_toggleBtn;
+    UIButton *_closeBtn;
 
     NSTimer *_timer;
     dispatch_queue_t _workQueue;
     BOOL _busy;
     BOOL _locked;
+    BOOL _userPaused;   // 用户点了停止按钮后不再被配置刷新悄悄拉起来
 
     // 读数过滤：OCR 偶尔会把数字认错导致读数突跳
     NSInteger _lastValue;
@@ -98,6 +101,13 @@ static void TDHandleLockStateChanged(CFNotificationCenterRef center,
     _statusLabel.text = @"启动中…";
     [_container addSubview:_statusLabel];
 
+    _toggleBtn = [self makeHudButton:@"⏸" action:@selector(toggleRecognition)];
+    [_container addSubview:_toggleBtn];
+
+    _closeBtn = [self makeHudButton:@"✕" action:@selector(closeHUD)];
+    _closeBtn.backgroundColor = [UIColor colorWithWhite:0.2 alpha:0.45];
+    [_container addSubview:_closeBtn];
+
     [self registerNotifications];
     [self applyConfig];
     TDLog(@"悬浮窗内容已就绪，开始识别循环");
@@ -111,6 +121,19 @@ static void TDHandleLockStateChanged(CFNotificationCenterRef center,
 }
 
 #pragma mark - 布局
+
+- (UIButton *)makeHudButton:(NSString *)title action:(SEL)action
+{
+    UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
+    b.layer.cornerRadius = 11.0;
+    b.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.16];
+    b.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
+    b.tintColor = [UIColor whiteColor];
+    [b setTitle:title forState:UIControlStateNormal];
+    [b setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    [b addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
+    return b;
+}
 
 - (void)layoutContainer
 {
@@ -136,12 +159,17 @@ static void TDHandleLockStateChanged(CFNotificationCenterRef center,
     _statusLabel.hidden = !cfg.showStatus;
 
     CGFloat pad = 8.0;
+    CGFloat btnCol = 26.0;   // 右侧按钮列宽度
     CGFloat timeH = round(fontSize * 1.32);
-    _timeLabel.frame = CGRectMake(pad, 6.0, _container.bounds.size.width - pad * 2, timeH);
+    CGFloat textW = _container.bounds.size.width - pad * 2 - btnCol;
+    _timeLabel.frame = CGRectMake(pad, 6.0, textW, timeH);
     if (cfg.showStatus) {
-        _statusLabel.frame = CGRectMake(pad, 6.0 + timeH + 2.0,
-                                        _container.bounds.size.width - pad * 2, 14.0);
+        _statusLabel.frame = CGRectMake(pad, 6.0 + timeH + 2.0, textW, 14.0);
     }
+
+    CGFloat btnX = _container.bounds.size.width - btnCol - 2.0;
+    _toggleBtn.frame = CGRectMake(btnX, 8.0, 22.0, 22.0);
+    _closeBtn.frame = CGRectMake(btnX, _container.bounds.size.height - 30.0, 22.0, 22.0);
 
     _container.layer.borderWidth = cfg.debugBorder ? 1.0 : 0.0;
 
@@ -182,6 +210,7 @@ static void TDHandleLockStateChanged(CFNotificationCenterRef center,
         [self stopLoop];
         [self setStatusText:@"已停用"];
     }
+    [self updateToggleUI];
 }
 
 #pragma mark - 通知
@@ -240,9 +269,10 @@ static void TDHandleLockStateChanged(CFNotificationCenterRef center,
 - (void)startLoop
 {
     TDConfig *cfg = [TDConfig shared];
-    if (!cfg.enabled) return;
+    if (!cfg.enabled || _userPaused) return;
 
     [self stopLoop];
+    _userPaused = NO;
 
     NSTimeInterval interval = MAX(cfg.interval, 0.05);
     _timer = [NSTimer timerWithTimeInterval:interval
@@ -251,6 +281,7 @@ static void TDHandleLockStateChanged(CFNotificationCenterRef center,
                                    userInfo:nil
                                     repeats:YES];
     [[NSRunLoop mainRunLoop] addTimer:_timer forMode:NSRunLoopCommonModes];
+    [self updateToggleUI];
 }
 
 - (void)stopLoop
@@ -259,6 +290,46 @@ static void TDHandleLockStateChanged(CFNotificationCenterRef center,
         [_timer invalidate];
         _timer = nil;
     }
+}
+
+- (void)updateToggleUI
+{
+    BOOL running = (_timer != nil);
+    [_toggleBtn setTitle:(running ? @"⏸" : @"▶") forState:UIControlStateNormal];
+    _toggleBtn.backgroundColor = running
+        ? [UIColor colorWithWhite:1.0 alpha:0.16]
+        : [UIColor colorWithRed:0.30 green:0.85 blue:0.45 alpha:0.30];
+}
+
+#pragma mark - 悬浮窗按钮
+
+- (void)toggleRecognition
+{
+    if (_timer) {
+        // 停止识别（悬浮窗保留在屏幕上）
+        _userPaused = YES;
+        [self stopLoop];
+        _timeLabel.text = @"已停止";
+        _timeLabel.textColor = [UIColor colorWithWhite:1.0 alpha:0.55];
+        [self setStatusText:@"点 ▶ 重新开始识别"];
+        TDLog(@"用户点悬浮窗按钮：停止识别");
+    } else {
+        _userPaused = NO;
+        _timeLabel.textColor = [UIColor whiteColor];
+        _timeLabel.text = @"--:--";
+        [self setStatusText:@"启动中…"];
+        TDLog(@"用户点悬浮窗按钮：开始识别");
+        [self startLoop];
+    }
+    [self updateToggleUI];
+}
+
+- (void)closeHUD
+{
+    TDLog(@"用户点悬浮窗关闭按钮，退出 HUD 进程");
+    dispatch_async(dispatch_get_main_queue(), ^{
+        exit(0);
+    });
 }
 
 - (void)tick
