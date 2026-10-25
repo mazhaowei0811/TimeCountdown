@@ -445,12 +445,21 @@ static void TDLoadPrivateSymbols(void)
         return YES;
     }
     if (gTDProbe3Mode) {
-        TDLog(@"=== 截屏探针开始（UIKit 环境内）===");
-        NSString *report = [[TDEngine shared] probeCaptureReport];
-        for (NSString *line in [report componentsSeparatedByString:@"\n"])
-            if (line.length) TDLog(@"探针 %@", line);
-        TDLog(@"=== 截屏探针结束 ===");
-        exit(0);
+        // 立刻执行时 IOSurfaceCreate 会失败（runloop 还没转起来），
+        // 延迟到 runloop 正常运行后再跑，并先用真实 captureScreen 做对照
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            TDLog(@"=== 截屏探针开始（runloop 已运转）===");
+            CGImageRef img = [[TDEngine shared] captureScreen];
+            TDLog(@"探针对照 captureScreen=%@", img ? @"成功" : @"失败");
+            if (img) CGImageRelease(img);
+            NSString *report = [[TDEngine shared] probeCaptureReport];
+            for (NSString *line in [report componentsSeparatedByString:@"\n"])
+                if (line.length) TDLog(@"探针 %@", line);
+            TDLog(@"=== 截屏探针结束 ===");
+            exit(0);
+        });
+        return YES;
     }
 
     // 这一步必须在 objc_getClass("SBSAccessibilityWindowHostingController") 之前，
