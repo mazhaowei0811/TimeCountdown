@@ -565,7 +565,8 @@ static NSInteger TDParseRemaining(NSString *text)
             UIImage *im2 = UIGraphicsGetImageFromCurrentImageContext();
             UIGraphicsEndImageContext();
             if (im2) {
-                [[UIImagePNGRepresentation(im2) writeToFile:path atomically:YES] ? (void)0 : (void)0];
+                NSData *png2 = UIImagePNGRepresentation(im2);
+                [png2 writeToFile:path atomically:YES];
                 chmod([path UTF8String], 0666);
                 [out appendFormat:@"已保存 IOMFB 整屏图到 %@\n", path];
             }
@@ -598,7 +599,7 @@ static NSInteger TDParseRemaining(NSString *text)
     static void *conn = NULL;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        if (td_iomfb_open(mainDisplay, mach_task_self(), 0, &conn) != 0)
+        if (td_iomfb_open(mainDisplay, (void *)(uintptr_t)mach_task_self(), 0, &conn) != 0)
             conn = NULL;
     });
     if (!conn)
