@@ -445,11 +445,11 @@ static void TDLoadPrivateSymbols(void)
         return YES;
     }
     if (gTDProbe3Mode) {
-        // 立刻执行时 IOSurfaceCreate 会失败（runloop 还没转起来），
-        // 延迟到 runloop 正常运行后再跑，并先用真实 captureScreen 做对照
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)),
+        // 实验：先像 HUD 一样建窗口，再延迟跑探针。
+        // 猜测：IOSurfaceCreate 依赖窗口建立后与 backboardd 的连接。
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
-            TDLog(@"=== 截屏探针开始（runloop 已运转）===");
+            TDLog(@"=== 截屏探针开始（窗口已建）===");
             CGImageRef img = [[TDEngine shared] captureScreen];
             TDLog(@"探针对照 captureScreen=%@", img ? @"成功" : @"失败");
             if (img) CGImageRelease(img);
@@ -459,7 +459,7 @@ static void TDLoadPrivateSymbols(void)
             TDLog(@"=== 截屏探针结束 ===");
             exit(0);
         });
-        return YES;
+        // 不 return，继续走 setupHUDWindow
     }
 
     // 这一步必须在 objc_getClass("SBSAccessibilityWindowHostingController") 之前，
