@@ -215,14 +215,46 @@ static void TDLoadPrivateSymbols(void)
     NSString *fullDebugPath = [caches stringByAppendingPathComponent:@"test_full.png"];
 
     CGSize fb = [[TDEngine shared] screenFramebufferSize];
-    CGRect fbRect = [cfg framebufferRectForCaptureSize:fb];
 
-    TDLog(@"自检：framebuffer %.0fx%.0f，裁剪 (%.0f, %.0f, %.0fx%.0f)",
-          fb.width, fb.height, fbRect.origin.x, fbRect.origin.y, fbRect.size.width, fbRect.size.height);
+    // 自动匹配坐标系：横屏游戏的坐标必须旋转回竖屏物理坐标才能裁剪，
+    // 与其让用户挨个试，不如把三个坐标系都试一遍，哪个能读出倒计时就用哪个。
+    NSString *savedSpace = cfg.coordSpace ?: TDCoordSpaceLandscapeRight;
+    NSArray<NSString *> *spaces = savedSpace == TDCoordSpacePortrait
+        ? @[TDCoordSpacePortrait, TDCoordSpaceLandscapeRight, TDCoordSpaceLandscapeLeft]
+        : (savedSpace == TDCoordSpaceLandscapeRight
+           ? @[TDCoordSpaceLandscapeRight, TDCoordSpaceLandscapeLeft, TDCoordSpacePortrait]
+           : @[TDCoordSpaceLandscapeLeft, TDCoordSpaceLandscapeRight, TDCoordSpacePortrait]);
 
-    TDResult *r = [[TDEngine shared] recognizeRect:fbRect debugPath:debugPath fullDebugPath:fullDebugPath];
-    TDLog(@"自检结果 status=%ld text=%@ 截屏 %.0fms OCR %.0fms",
-          (long)r.status, r.text ?: @"", r.captureMs, r.ocrMs);
+    TDResult *r = nil;
+    NSString *triedSpace = savedSpace;
+    CGRect fbRect = CGRectZero;
+
+    for (NSString *space in spaces) {
+        cfg.coordSpace = space;
+        fbRect = [cfg framebufferRectForCaptureSize:fb];
+        TDLog(@"自检尝试坐标系 %@：裁剪 (%.0f, %.0f, %.0fx%.0f)",
+              space, fbRect.origin.x, fbRect.origin.y, fbRect.size.width, fbRect.size.height);
+        r = [[TDEngine shared] recognizeRect:fbRect debugPath:debugPath fullDebugPath:fullDebugPath];
+        TDLog(@"自检 status=%ld text=%@ 截屏 %.0fms OCR %.0fms",
+              (long)r.status, r.text ?: @"", r.captureMs, r.ocrMs);
+        if (r.status == TDStatusOK) { triedSpace = space; break; }
+    }
+
+    BOOL matched = (r.status == TDStatusOK);
+    if (matched) {
+        // 识别成功 —— 把匹配到的坐标系直接存进配置，HUD 也会跟着生效
+        if (![triedSpace isEqualToString:savedSpace]) {
+            cfg.coordSpace = triedSpace;
+            [cfg save];
+            [cfg notifyReload];
+            TDLog(@"坐标系自动匹配成功并保存：%@", triedSpace);
+        }
+    } else {
+        cfg.coordSpace = savedSpace;   // 没匹配上就还原
+    }
+
+    TDLog(@"自检结论 status=%ld 坐标系=%@ 匹配=%d",
+          (long)r.status, triedSpace, (int)matched);
 
     NSDictionary *out = @{
         @"status": @(r.status),
@@ -240,6 +272,9 @@ static void TDLoadPrivateSymbols(void)
         @"rectH": @(fbRect.size.height),
         @"debugPath": debugPath,
         @"fullDebugPath": fullDebugPath,
+        @"coordSpace": triedSpace,
+        @"savedSpace": savedSpace,
+        @"matched": @(matched),
     };
 
     NSString *outPath = [caches stringByAppendingPathComponent:@"test_result.json"];

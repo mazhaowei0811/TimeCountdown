@@ -540,7 +540,7 @@
     [self writeToConfig];
     [[TDConfig shared] save];
 
-    _logView.text = @"正在自检…（以 root 身份起一个临时进程，约 1~2 秒）";
+    _logView.text = @"正在自检…（自动尝试三个坐标系，约 2~5 秒）";
     TDLog(@"用户发起自检");
 
     NSString *caches = [NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES) firstObject];
@@ -588,6 +588,22 @@
     [s appendFormat:@"OCR 文本: %@\n", text.length ? text : @"（空）"];
     if (status == 1)
         [s appendFormat:@"剩余秒数: %ld  →  %@\n", (long)remaining, res[@"display"] ?: @""];
+
+    // 坐标系自动匹配的结果
+    NSString *triedSpace = res[@"coordSpace"];
+    BOOL matched = [res[@"matched"] boolValue];
+    NSString *savedSpace = res[@"savedSpace"];
+    if (triedSpace.length) {
+        if (status == 1) {
+            if ([triedSpace isEqualToString:savedSpace])
+                [s appendFormat:@"坐标系: %@（本来就是对的，未改动）\n", triedSpace];
+            else
+                [s appendFormat:@"坐标系: 自动匹配为「%@」并已保存，悬浮窗即刻生效 ✅\n", triedSpace];
+        } else if (matched == NO) {
+            [s appendFormat:@"坐标系: 三个方向都试过了（最后：%@），没有一个读出倒计时\n", triedSpace];
+        }
+    }
+
     if (detail.length)
         [s appendFormat:@"说明: %@\n", detail];
     [s appendFormat:@"\n耗时: 截屏 %.0fms / OCR %.0fms\n", captureMs, ocrMs];
@@ -598,8 +614,7 @@
         [res[@"rectW"] doubleValue], [res[@"rectH"] doubleValue]];
     [s appendFormat:@"\n裁剪图: %@\n", debugPath];
     [s appendFormat:@"全屏校准图: %@\n", res[@"fullDebugPath"] ?: @"（本版没有生成）"];
-    [s appendFormat:@"（都在「文件」App 的本应用目录里；全屏图上红框就是当前识别区域，"
-                    @"红框没套住倒计时文字就说明坐标要调）"];
+    [s appendFormat:@"（都在「文件」App 的本应用目录里；全屏图上红框就是当前识别区域）"];
 
     if (status == 2 || status == 3) {
         [s appendString:@"\n提示：先看裁剪图对不对。如果图截错了区域，"
