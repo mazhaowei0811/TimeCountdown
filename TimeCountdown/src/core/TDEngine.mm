@@ -405,7 +405,29 @@ static NSInteger TDParseRemaining(NSString *text)
         @"IOSurfaceAllocSize": @(bpr * h),
     };
     TDIOSurfaceRef s = td_surface_create((__bridge CFDictionaryRef)props);
-    if (!s) return [out stringByAppendingString:@"surface 创建失败\n"];
+    if (!s) {
+        // 细分诊断：小尺寸能不能建？去掉行宽指定能不能建？
+        NSDictionary *tiny = @{
+            @"IOSurfaceIsGlobal": @YES,
+            @"IOSurfaceBytesPerElement": @4,
+            @"IOSurfaceWidth": @(64),
+            @"IOSurfaceHeight": @(64),
+        };
+        TDIOSurfaceRef t1 = td_surface_create((__bridge CFDictionaryRef)tiny);
+        [out appendFormat:@"大surface创建失败，64x64默认参数=%@ ",
+                             t1 ? @"成功" : @"失败"];
+        if (t1) {
+            [out appendFormat:@"(bpr=%zu) ", td_surface_bpr(t1)];
+            CFRelease((CFTypeRef)t1);
+        }
+        NSMutableDictionary *noBpr = [props mutableCopy];
+        [noBpr removeObjectForKey:@"IOSurfaceBytesPerRow"];
+        [noBpr removeObjectForKey:@"IOSurfaceAllocSize"];
+        TDIOSurfaceRef t2 = td_surface_create((__bridge CFDictionaryRef)noBpr);
+        [out appendFormat:@"750x1334无行宽=%@\n", t2 ? @"成功" : @"失败"];
+        if (t2) CFRelease((CFTypeRef)t2);
+        return out;
+    }
 
     void *server = rsCreate ? rsCreate(NULL, NULL) : NULL;
     [out appendFormat:@"server=%p\n", server];
