@@ -156,7 +156,8 @@ NSString * const TDCoordSpaceLandscapeLeft  = @"landscapeLeft";
     // 宽度按最长的显示形态 "1:05:30"（7 个等宽字符）留量，
     // 再加上会话里可能出现的「分/秒」这类全角字。
     CGFloat w = round(fs * 4.8) + 24;
-    CGFloat h = round(fs * 1.32) + (_showStatus ? 28.0 : 12.0);
+    // 底部预留一行按钮（约 30pt）：开始/停止、测试识别、关闭
+    CGFloat h = round(fs * 1.32) + (_showStatus ? 28.0 : 12.0) + 34.0;
     return CGSizeMake(w, h);
 }
 

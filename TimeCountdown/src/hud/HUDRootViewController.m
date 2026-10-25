@@ -164,19 +164,26 @@ static void TDHandleLockStateChanged(CFNotificationCenterRef center,
     _statusLabel.hidden = !cfg.showStatus;
 
     CGFloat pad = 8.0;
-    CGFloat btnCol = 26.0;   // 右侧按钮列宽度
     CGFloat timeH = round(fontSize * 1.32);
-    CGFloat textW = _container.bounds.size.width - pad * 2 - btnCol;
-    _timeLabel.frame = CGRectMake(pad, 6.0, textW, timeH);
+    CGFloat textW = _container.bounds.size.width - pad * 2;
+    _timeLabel.frame = CGRectMake(pad, 4.0, textW, timeH);
     if (cfg.showStatus) {
-        _statusLabel.frame = CGRectMake(pad, 6.0 + timeH + 2.0, textW, 14.0);
+        _statusLabel.frame = CGRectMake(pad, 4.0 + timeH + 2.0, textW, 14.0);
     }
 
-    CGFloat btnX = _container.bounds.size.width - btnCol - 2.0;
-    CGFloat btnH = 20.0;
-    _toggleBtn.frame = CGRectMake(btnX, 6.0, btnH, btnH);
-    _testBtn.frame = CGRectMake(btnX, round((_container.bounds.size.height - btnH) / 2.0), btnH, btnH);
-    _closeBtn.frame = CGRectMake(btnX, _container.bounds.size.height - btnH - 6.0, btnH, btnH);
+    // 底部一整行按钮，每个足够大好按
+    CGFloat btnY = _container.bounds.size.height - 32.0;
+    CGFloat btnH = 28.0;
+    CGFloat btnW = floor((textW - 8.0) / 3.0);
+    _toggleBtn.frame = CGRectMake(pad, btnY, btnW, btnH);
+    _testBtn.frame   = CGRectMake(pad + btnW + 4.0, btnY, btnW, btnH);
+    _closeBtn.frame  = CGRectMake(pad + (btnW + 4.0) * 2, btnY, btnW, btnH);
+    _toggleBtn.layer.cornerRadius = 8.0;
+    _testBtn.layer.cornerRadius = 8.0;
+    _closeBtn.layer.cornerRadius = 8.0;
+    _toggleBtn.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+    _testBtn.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
+    _closeBtn.titleLabel.font = [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold];
 
     _container.layer.borderWidth = cfg.debugBorder ? 1.0 : 0.0;
 
