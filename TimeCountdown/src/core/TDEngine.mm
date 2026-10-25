@@ -675,10 +675,19 @@ static NSInteger TDParseRemaining(NSString *text)
 
     TDIOSurfaceRef s = NULL;
     if (conn && td_iomfb_getlayer) {
+        static BOOL loggedGL = NO;
         void *surf = NULL;
-        int gl = td_iomfb_getlayer(conn, 0, &surf);
-        if (gl == 0 && surf)
-            s = (TDIOSurfaceRef)surf;
+        int gl = -1;
+        for (int idx = 0; idx < 4; idx++) {
+            surf = NULL;
+            gl = td_iomfb_getlayer(conn, idx, &surf);
+            if (gl == 0 && surf) {
+                s = (TDIOSurfaceRef)surf;
+                if (!loggedGL) { loggedGL = YES; TDLog(@"IOMFB GetLayer idx=%d 成功", idx); }
+                break;
+            }
+        }
+        if (!s && !loggedGL) { loggedGL = YES; TDLog(@"IOMFB GetLayer idx0-3 全部失败 ret=0x%x", gl); }
     }
     if (!s && td_surface_lookup && td_io_prop) {
         // 注册表兜底：读帧缓冲 surface 的 IOSurfaceID，再 IOSurfaceLookup
