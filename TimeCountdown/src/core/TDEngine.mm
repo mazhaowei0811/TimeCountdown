@@ -628,7 +628,8 @@ static NSString *TDDumpDisplayRegistryKeys(void)
     kern_return_t kr = props(svc, &dict, NULL, 0);
     if (rel) rel(svc);
     if (kr != 0 || !dict) return [NSString stringWithFormat:@"属性读取失败 0x%x", kr];
-    NSArray *keys = [[(NSDictionary *)dict allKeys] sortedArrayUsingSelector:@selector(compare:)];
+    NSArray *keys = [(__bridge NSDictionary *)dict allKeys];
+    keys = [keys sortedArrayUsingSelector:@selector(compare:)];
     CFRelease(dict);
     NSMutableString *ms = [NSMutableString string];
     for (NSString *k in keys) [ms appendFormat:@"%@  ", k];
