@@ -429,6 +429,34 @@ static NSInteger TDParseRemaining(NSString *text)
         return r;
     }
 
+    // 全黑画面检测：熄屏/锁屏时渲染服务器返回的内容就是一整块黑，
+    // OCR 当然什么都读不到 —— 这种情况要明确告诉用户，而不是让他怀疑坐标。
+    {
+        size_t sw = CGImageGetWidth(cropped), sh = CGImageGetHeight(cropped);
+        if (sw > 0 && sh > 0) {
+            CGContextRef bc = CGBitmapContextCreate(NULL, sw, sh, 8, sw * 4,
+                                                    CGImageGetColorSpace(cropped),
+                                                    kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+            if (bc) {
+                CGContextDrawImage(bc, CGRectMake(0, 0, sw, sh), cropped);
+                const uint8_t *px = (const uint8_t *)CGBitmapContextGetData(bc);
+                size_t n = sw * sh * 4, lit = 0;
+                for (size_t i = 0; i + 3 < n; i += 16) {   // 隔 4 像素抽样
+                    if (px[i] > 28 || px[i+1] > 28 || px[i+2] > 28) lit++;
+                }
+                size_t sampled = n / 16;
+                CGContextRelease(bc);
+                if (sampled > 0 && lit * 20 < sampled) {   // 亮像素 < 5%
+                    r.status = TDStatusNoText;
+                    r.detail = @"截到的画面是全黑的 —— 屏幕大概率已熄屏或锁定。"
+                               @"请保持手机亮屏并停在游戏画面再测。";
+                    CGImageRelease(cropped);
+                    return r;
+                }
+            }
+        }
+    }
+
     CGImageRef scaled = TDScaleImage(cropped, 3.0);
     CGImageRelease(cropped);
 
