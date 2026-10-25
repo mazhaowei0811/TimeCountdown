@@ -372,6 +372,66 @@ static NSInteger TDParseRemaining(NSString *text)
     return [self recognizeRect:fbRect debugPath:debugPath fullDebugPath:nil];
 }
 
+- (NSString *)probeCaptureReport
+{
+    if (!TDLoadSurfaceSymbols())
+        return @"符号加载失败";
+    if (!td_render_display)
+        return @"找不到 CARenderServerRenderDisplay";
+
+    CGSize fb = [self screenFramebufferSize];
+    size_t w = (size_t)fb.width, h = (size_t)fb.height;
+    size_t bpr = (w * 4 + 63) & ~(size_t)63;
+    NSMutableString *out = [NSMutableString string];
+
+    struct { uint32_t pf; const char *name; } fmts[] = {
+        { 0x42475241, "BGRA" },
+        { 0x41524742, "ARGB" },
+    };
+
+    for (size_t f = 0; f < sizeof(fmts)/sizeof(fmts[0]); f++) {
+        NSDictionary *props = @{
+            @"IOSurfaceIsGlobal": @YES,
+            @"IOSurfaceBytesPerElement": @4,
+            @"IOSurfaceBytesPerRow": @(bpr),
+            @"IOSurfaceWidth": @(w),
+            @"IOSurfaceHeight": @(h),
+            @"IOSurfacePixelFormat": @(fmts[f].pf),
+            @"IOSurfaceAllocSize": @(bpr * h),
+        };
+        TDIOSurfaceRef s = td_surface_create((__bridge CFDictionaryRef)props);
+        if (!s) {
+            [out appendFormat:@"%s: surface 创建失败\n", fmts[f].name];
+            continue;
+        }
+        for (int ctx = 0; ctx < 2; ctx++) {
+            for (int attempt = 0; attempt < 2; attempt++) {
+                td_surface_lock(s, 0, NULL);
+                CFTimeInterval t0 = CACurrentMediaTime();
+                if (ctx == 0) td_render_display(0, CFSTR("LCD"), s, 0, 0);
+                else          td_render_display(0, NULL, s, 0, 0);
+                double ms = (CACurrentMediaTime() - t0) * 1000.0;
+                if (attempt == 1)
+                    [NSThread sleepForTimeInterval:0.3];   // 异步写入假设：等渲染完成再读
+                uint8_t *base = (uint8_t *)td_surface_base(s);
+                size_t lit = 0, sampled = 0;
+                if (base) {
+                    for (size_t i = 0; i + 3 < bpr * h; i += 256) {
+                        sampled++;
+                        if (base[i] > 28 || base[i+1] > 28 || base[i+2] > 28) lit++;
+                    }
+                }
+                td_surface_unlock(s, 0, NULL);
+                [out appendFormat:@"%s/%s/尝试%d: 耗时%.0fms 亮像素%lu/%lu\n",
+                     fmts[f].name, ctx == 0 ? "LCD" : "NULL", attempt + 1,
+                     ms, (unsigned long)lit, (unsigned long)sampled];
+            }
+        }
+        CFRelease((CFTypeRef)s);
+    }
+    return out;
+}
+
 - (TDResult *)recognizeRect:(CGRect)fbRect
                   debugPath:(NSString *)debugPath
              fullDebugPath:(NSString *)fullDebugPath

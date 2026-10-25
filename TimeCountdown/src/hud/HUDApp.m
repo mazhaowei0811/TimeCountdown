@@ -574,6 +574,16 @@ static int TDCheckHUD(void)
     return (kill(pid, 0) == 0) ? EXIT_FAILURE : EXIT_SUCCESS;
 }
 
+static void TDRunProbe3(void)
+{
+    TDLog(@"=== 截屏探针开始 ===");
+    NSString *report = [[TDEngine shared] probeCaptureReport];
+    for (NSString *line in [report componentsSeparatedByString:@"\n"])
+        if (line.length) TDLog(@"探针 %@", line);
+    TDLog(@"=== 截屏探针结束 ===");
+    exit(0);
+}
+
 int main(int argc, char *argv[])
 {
     @autoreleasepool {
@@ -586,6 +596,8 @@ int main(int argc, char *argv[])
             gTDProbeMode = YES;
             return TDRunHUD();
         }
+        if (strcmp(argv[1], "-probe3") == 0)
+            TDRunProbe3();
         if (strcmp(argv[1], "-test") == 0) {
             gTDTestMode = YES;
             return TDRunHUD();

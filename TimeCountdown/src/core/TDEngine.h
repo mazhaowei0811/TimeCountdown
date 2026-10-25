@@ -41,6 +41,10 @@ typedef NS_ENUM(NSInteger, TDStatus) {
                   debugPath:(nullable NSString *)debugPath
              fullDebugPath:(nullable NSString *)fullDebugPath;
 
+/// 截屏多方案探针：枚举像素格式/上下文名组合，报告每种组合的亮度，
+/// 用来诊断「截到的画面全黑」到底是哪种组合的问题。仅诊断用。
+- (NSString *)probeCaptureReport;
+
 @end
 
 NS_ASSUME_NONNULL_END
