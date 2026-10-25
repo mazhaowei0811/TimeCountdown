@@ -434,6 +434,33 @@ static NSInteger TDParseRemaining(NSString *text)
     if (server && rsStop) rsStop(server);
     if (server) CFRelease((CFTypeRef)server);
     CFRelease((CFTypeRef)s);
+
+    // 变体 5：UIKit 私有截屏入口 _UICreateScreenUIImage()
+    if (&_UICreateScreenUIImage != NULL) {
+        @try {
+            UIImage *img = _UICreateScreenUIImage();
+            if (img) {
+                CGSize sz = img.size;
+                UIGraphicsBeginImageContextWithOptions(CGSizeMake(1, 1), NO, 1.0);
+                [img drawInRect:CGRectMake(0, 0, 1, 1)];
+                UIImage *thumb = UIGraphicsGetImageFromCurrentImageContext();
+                UIGraphicsEndImageContext();
+                NSData *thumbData = UIImagePNGRepresentation(thumb);
+                [out appendFormat:@"_UICreateScreenUIImage: 尺寸 %.0fx%.0f (缩放 %.0f) 缩略图 %lu 字节\n",
+                     sz.width, sz.height, img.scale, (unsigned long)thumbData.length];
+                NSString *path = @"/var/root/Library/Caches/probe_uiimage.png";
+                [UIImagePNGRepresentation(img) writeToFile:path atomically:YES];
+                chmod([path UTF8String], 0666);
+                [out appendFormat:@"已保存整屏图到 %@\n", path];
+            } else {
+                [out appendString:@"_UICreateScreenUIImage: 返回 nil\n"];
+            }
+        } @catch (NSException *e) {
+            [out appendFormat:@"_UICreateScreenUIImage: 异常 %@\n", e.reason];
+        }
+    } else {
+        [out appendString:@"_UICreateScreenUIImage: 符号不存在\n"];
+    }
     return out;
 }
 
