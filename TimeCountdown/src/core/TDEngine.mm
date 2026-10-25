@@ -408,28 +408,49 @@ static NSInteger TDParseRemaining(NSString *text)
     [out appendFormat:@"server=%p\n", server];
     if (server && rsStart) rsStart(server);
 
-    for (int v = 0; v < 4; v++) {
-        td_surface_lock(s, 0, NULL);
+    for (int v = 0; v < 8; v++) {
+        // 变体 5-8：行宽严格等于 width*4（3000）—— 渲染服务器可能拒绝
+        // 与 width*4 不一致的 bytesPerRow，静默不写内容（0ms 返回 + 全黑）。
+        TDIOSurfaceRef target = s;
+        TDIOSurfaceRef narrow = NULL;
+        if (v >= 4) {
+            NSDictionary *nprops = @{
+                @"IOSurfaceIsGlobal": @YES,
+                @"IOSurfaceBytesPerElement": @4,
+                @"IOSurfaceBytesPerRow": @(w * 4),
+                @"IOSurfaceWidth": @(w),
+                @"IOSurfaceHeight": @(h),
+                @"IOSurfacePixelFormat": @(0x42475241),
+                @"IOSurfaceAllocSize": @(w * 4 * h),
+            };
+            narrow = td_surface_create((__bridge CFDictionaryRef)props);
+            if (!narrow) { [out appendFormat:@"变体%d: 3000行宽surface创建失败\n", v + 1]; continue; }
+            target = narrow;
+        }
+        td_surface_lock(target, 0, NULL);
         CFTimeInterval t0 = CACurrentMediaTime();
         switch (v) {
-            case 0: td_render_display(0, CFSTR("LCD"), s, 0, 0); break;                 // 老用法
-            case 1: if (server) td_render_display(server, CFSTR("LCD"), s, 0, 0); break;
-            case 2: if (server) td_render_display(server, NULL, s, 0, 0); break;
-            case 3: if (server) td_render_display(server, CFSTR("LCD"), s, 0, 0); break; // Start 后再试
+            case 0: case 4: td_render_display(0, CFSTR("LCD"), target, 0, 0); break;
+            case 1: case 5: if (server) td_render_display(server, CFSTR("LCD"), target, 0, 0); break;
+            case 2: case 6: if (server) td_render_display(server, NULL, target, 0, 0); break;
+            case 3: case 7: if (server) td_render_display(server, CFSTR("LCD"), target, 0, 0); break;
         }
         double ms = (CACurrentMediaTime() - t0) * 1000.0;
         [NSThread sleepForTimeInterval:0.15];
-        uint8_t *base = (uint8_t *)td_surface_base(s);
+        uint8_t *base = (uint8_t *)td_surface_base(target);
+        size_t rowB = (v >= 4) ? w * 4 : bpr;
         size_t lit = 0, sampled = 0;
         if (base) {
-            for (size_t i = 0; i + 3 < bpr * h; i += 256) {
+            for (size_t i = 0; i + 3 < rowB * h; i += 256) {
                 sampled++;
                 if (base[i] > 28 || base[i+1] > 28 || base[i+2] > 28) lit++;
             }
         }
-        td_surface_unlock(s, 0, NULL);
-        [out appendFormat:@"变体%d: 耗时%.0fms 亮像素%lu/%lu\n", v + 1, ms,
+        td_surface_unlock(target, 0, NULL);
+        [out appendFormat:@"变体%d(%s): 耗时%.0fms 亮像素%lu/%lu\n", v + 1,
+             v >= 4 ? "行宽3000" : "行宽3072", ms,
              (unsigned long)lit, (unsigned long)sampled];
+        if (narrow) CFRelease((CFTypeRef)narrow);
     }
     if (server && rsStop) rsStop(server);
     if (server) CFRelease((CFTypeRef)server);
