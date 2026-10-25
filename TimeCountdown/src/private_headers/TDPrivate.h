@@ -17,10 +17,11 @@ NS_ASSUME_NONNULL_BEGIN
 #pragma mark - 截屏
 
 // CoreGraphics / QuartzCore 私有函数：把显示内容渲染到 IOSurface。
-// 第一个参数是 bootstrap 端口，传 0 即可；显示名固定 "LCD"。
+// 第一个参数：老 iOS 上是 bootstrap 端口（传 0）；iOS 14+ 疑似要传
+// CARenderServerCreate 创建的实例句柄，探针会两种都试。
 // 声明成一个函数指针类型，实际地址由 TDEngine 在运行时 dlsym 取，
 // 这样不依赖链接期的私有框架。
-typedef void (*TDRenderDisplayFn)(kern_return_t server, CFStringRef display,
+typedef void (*TDRenderDisplayFn)(void *server, CFStringRef display,
                                   void *surface, int x, int y);
 
 // 更简单的私有入口，UIKit 内部就是用它转 IOSurface -> UIImage。
