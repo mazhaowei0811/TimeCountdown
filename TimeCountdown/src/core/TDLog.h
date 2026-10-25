@@ -9,6 +9,10 @@
 
 #import <Foundation/Foundation.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 NS_ASSUME_NONNULL_BEGIN
 
 /// 写一行日志（同步落盘，带时间戳和 pid）。同步是有意为之：
@@ -33,3 +37,7 @@ int TDBootGuardPeek(void);
 void TDBootGuardReset(void);
 
 NS_ASSUME_NONNULL_END
+
+#ifdef __cplusplus
+}
+#endif
