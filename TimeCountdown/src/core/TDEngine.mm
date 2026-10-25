@@ -21,7 +21,31 @@ static int   (*td_surface_lock)(TDIOSurfaceRef, uint32_t, void *) = NULL;
 static int   (*td_surface_unlock)(TDIOSurfaceRef, uint32_t, void *) = NULL;
 static size_t(*td_surface_bpr)(TDIOSurfaceRef) = NULL;
 static void *(*td_surface_base)(TDIOSurfaceRef) = NULL;
+static size_t (*td_surface_w)(TDIOSurfaceRef) = NULL;
+static size_t (*td_surface_h)(TDIOSurfaceRef) = NULL;
 static TDRenderDisplayFn td_render_display = NULL;
+
+// IOMobileFramebuffer —— 直接读取显示合成 surface（屏幕真实内容），
+// 不依赖 CARenderServer 重渲染（后者在本机上输出全黑）
+static int   (*td_iomfb_getmain)(void **) = NULL;
+static int   (*td_iomfb_open)(void *, void *, unsigned int, void **) = NULL;
+static int   (*td_iomfb_getlayer)(void *, int, void **) = NULL;
+static bool  td_iomfb_ready = false;
+
+static bool TDLoadFramebufferSymbols(void)
+{
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        void *h = dlopen("/System/Library/PrivateFrameworks/IOMobileFramebuffer.framework/IOMobileFramebuffer",
+                         RTLD_LAZY | RTLD_LOCAL);
+        if (!h) return;
+        td_iomfb_getmain  = (int (*)(void **))dlsym(h, "IOMobileFramebufferGetMainDisplay");
+        td_iomfb_open     = (int (*)(void *, void *, unsigned int, void **))dlsym(h, "IOMobileFramebufferOpen");
+        td_iomfb_getlayer = (int (*)(void *, int, void **))dlsym(h, "IOMobileFramebufferGetLayerDefaultSurface");
+        td_iomfb_ready = (td_iomfb_getmain && td_iomfb_open && td_iomfb_getlayer);
+    });
+    return td_iomfb_ready;
+}
 
 static bool TDLoadSurfaceSymbols(void)
 {
@@ -45,6 +69,8 @@ static bool TDLoadSurfaceSymbols(void)
             td_surface_unlock = (int (*)(TDIOSurfaceRef, uint32_t, void *))dlsym(h, "IOSurfaceUnlock");
             td_surface_bpr    = (size_t (*)(TDIOSurfaceRef))dlsym(h, "IOSurfaceGetBytesPerRow");
             td_surface_base   = (void *(*)(TDIOSurfaceRef))dlsym(h, "IOSurfaceGetBaseAddress");
+            td_surface_w      = (size_t (*)(TDIOSurfaceRef))dlsym(h, "IOSurfaceGetWidth");
+            td_surface_h      = (size_t (*)(TDIOSurfaceRef))dlsym(h, "IOSurfaceGetHeight");
         }
 
         // CARenderServerRenderDisplay 在 QuartzCore 里，QuartzCore 是链接进来的，
@@ -507,7 +533,109 @@ static NSInteger TDParseRemaining(NSString *text)
     } else {
         [out appendString:@"_UICreateScreenUIImage: 符号不存在\n"];
     }
+
+    // IOMobileFramebuffer 直读测试（当前主攻方案）
+    if (TDLoadFramebufferSymbols()) {
+        CFTimeInterval tf0 = CACurrentMediaTime();
+        CGImageRef fbImg = [self captureFramebuffer];
+        double tfms = (CACurrentMediaTime() - tf0) * 1000.0;
+        if (fbImg) {
+            size_t fw = CGImageGetWidth(fbImg), fh = CGImageGetHeight(fbImg);
+            // 统计亮像素
+            CGContextRef bc = CGBitmapContextCreate(NULL, fw, fh, 8, fw * 4,
+                                                    CGImageGetColorSpace(fbImg),
+                                                    kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+            size_t lit = 0, sampled = 0;
+            if (bc) {
+                CGContextDrawImage(bc, CGRectMake(0, 0, fw, fh), fbImg);
+                const uint8_t *px = (const uint8_t *)CGBitmapContextGetData(bc);
+                size_t n = fw * fh * 4;
+                for (size_t i = 0; i + 3 < n; i += 16) {
+                    sampled++;
+                    if (px[i] > 28 || px[i+1] > 28 || px[i+2] > 28) lit++;
+                }
+                CGContextRelease(bc);
+            }
+            [out appendFormat:@"IOMFB直读: 成功 %.0fx%.0f 耗时%.0fms 亮像素%lu/%lu\n",
+                 (double)fw, (double)fh, tfms, (unsigned long)lit, (unsigned long)sampled];
+            NSString *path = @"/var/root/Library/Caches/probe_iomfb.png";
+            UIGraphicsBeginImageContextWithOptions(CGSizeMake(fw, fh), NO, 1.0);
+            CGContextRef c2 = UIGraphicsGetCurrentContext();
+            if (c2) CGContextDrawImage(c2, CGRectMake(0, 0, fw, fh), fbImg);
+            UIImage *im2 = UIGraphicsGetImageFromCurrentImageContext();
+            UIGraphicsEndImageContext();
+            if (im2) {
+                [[UIImagePNGRepresentation(im2) writeToFile:path atomically:YES] ? (void)0 : (void)0];
+                chmod([path UTF8String], 0666);
+                [out appendFormat:@"已保存 IOMFB 整屏图到 %@\n", path];
+            }
+            CGImageRelease(fbImg);
+        } else {
+            [out appendFormat:@"IOMFB直读: 失败（耗时%.0fms）\n", tfms];
+        }
+    } else {
+        [out appendString:@"IOMFB直读: 符号加载失败\n"];
+    }
     return out;
+}
+
+- (BOOL)framebufferCaptureAvailable
+{
+    return TDLoadFramebufferSymbols();
+}
+
+// 直接从 IOMobileFramebuffer 读取当前屏幕合成 surface，
+// 拷贝出一份 CPU 可读的位图并转成 CGImage。失败返回 NULL。
+- (CGImageRef)captureFramebuffer
+{
+    if (!TDLoadFramebufferSymbols())
+        return NULL;
+
+    void *mainDisplay = NULL;
+    if (td_iomfb_getmain(&mainDisplay) != 0 || !mainDisplay)
+        return NULL;
+
+    static void *conn = NULL;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        if (td_iomfb_open(mainDisplay, mach_task_self(), 0, &conn) != 0)
+            conn = NULL;
+    });
+    if (!conn)
+        return NULL;
+
+    void *surf = NULL;
+    if (td_iomfb_getlayer(conn, 0, &surf) != 0 || !surf)
+        return NULL;
+    TDIOSurfaceRef s = (TDIOSurfaceRef)surf;
+
+    size_t w = td_surface_w ? td_surface_w(s) : 0;
+    size_t h = td_surface_h ? td_surface_h(s) : 0;
+    size_t bpr = td_surface_bpr(s);
+    uint8_t *base = (uint8_t *)td_surface_base(s);
+    if (w < 1 || h < 1 || bpr < w * 4 || !base) {
+        CFRelease((CFTypeRef)s);
+        return NULL;
+    }
+
+    td_surface_lock(s, 0, NULL);
+    uint8_t *buf = (uint8_t *)malloc(bpr * h);
+    if (buf) memcpy(buf, base, bpr * h);
+    td_surface_unlock(s, 0, NULL);
+    CFRelease((CFTypeRef)s);
+    if (!buf)
+        return NULL;
+
+    // 设备 surface 是 BGRA（小端），对应 CG 的 premultipliedFirst + 32Little
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    CGContextRef ctx = CGBitmapContextCreate(buf, w, h, 8, bpr, cs,
+                                             kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+    CGColorSpaceRelease(cs);
+    if (!ctx) { free(buf); return NULL; }
+    CGImageRef img = CGBitmapContextCreateImage(ctx);
+    CGContextRelease(ctx);
+    free(buf);   // CreateImage 已拷贝
+    return img;
 }
 
 - (TDResult *)recognizeRect:(CGRect)fbRect
@@ -585,6 +713,20 @@ static NSInteger TDParseRemaining(NSString *text)
                 size_t sampled = n / 16;
                 CGContextRelease(bc);
                 if (sampled > 0 && lit * 20 < sampled) {   // 亮像素 < 5%
+                    // 渲染服务器路径全黑 —— 换 IOMobileFramebuffer 直读屏幕合成 surface
+                    CGImageRef fbImg = [self captureFramebuffer];
+                    if (fbImg) {
+                        CGImageRef fbCrop = CGImageCreateWithImageInRect(fbImg, rc);
+                        CGImageRelease(fbImg);
+                        if (fbCrop) {
+                            TDLog(@"渲染服务器全黑，已回退 IOMobileFramebuffer 直读（%.0fx%.0f）",
+                                  (double)CGImageGetWidth(fbCrop), (double)CGImageGetHeight(fbCrop));
+                            CGImageRelease(cropped);
+                            cropped = fbCrop;
+                            // 继续走 OCR，不再判熄屏
+                            goto fb_ok;
+                        }
+                    }
                     r.status = TDStatusNoText;
                     r.detail = @"截到的画面是全黑的 —— 屏幕大概率已熄屏或锁定。"
                                @"请保持手机亮屏并停在游戏画面再测。";
@@ -595,6 +737,7 @@ static NSInteger TDParseRemaining(NSString *text)
         }
     }
 
+fb_ok:;
     CGImageRef scaled = TDScaleImage(cropped, 3.0);
     CGImageRelease(cropped);
 
