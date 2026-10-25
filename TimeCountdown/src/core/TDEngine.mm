@@ -7,6 +7,7 @@
 #import <CoreImage/CoreImage.h>
 #import <QuartzCore/QuartzCore.h>
 #import <dlfcn.h>
+#import <sys/stat.h>
 #import <os/log.h>
 
 #pragma mark - IOSurface 运行时桥
