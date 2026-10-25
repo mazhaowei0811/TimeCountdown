@@ -635,12 +635,28 @@ static NSInteger TDParseRemaining(NSString *text)
 
     static void *conn = NULL;
     static dispatch_once_t once;
+    static int openRet = 0;
     dispatch_once(&once, ^{
-        if (td_iomfb_open(mainDisplay, (void *)(uintptr_t)mach_task_self(), 0, &conn) != 0)
+        openRet = td_iomfb_open(mainDisplay, (void *)(uintptr_t)mach_task_self(), 0, &conn);
+        if (openRet != 0) {
+            // 试试换服务名
+            static void *iok2 = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY | RTLD_LOCAL);
+            if (iok2) {
+                mach_port_t (*svcGet)(mach_port_t, void *) =
+                    (mach_port_t (*)(mach_port_t, void *))dlsym(iok2, "IOServiceGetMatchingService");
+                void *(*svcMatch)(const char *) = (void *(*)(const char *))dlsym(iok2, "IOServiceMatching");
+                if (svcGet && svcMatch) {
+                    void *clcd = (void *)svcGet(0, svcMatch("AppleCLCD"));
+                    if (clcd)
+                        openRet = td_iomfb_open(clcd, (void *)(uintptr_t)mach_task_self(), 0, &conn);
+                }
+            }
+        }
+        if (openRet != 0)
             conn = NULL;
     });
     if (!conn) {
-        if (!stepLogged) { stepLogged = YES; TDLog(@"IOMFB Open 失败"); }
+        if (!stepLogged) { stepLogged = YES; TDLog(@"IOMFB Open 失败 ret=0x%x", openRet); }
         return NULL;
     }
 
