@@ -598,14 +598,37 @@ static void TDRunProbe3(void)
     // 独立进程里 IOSurface 创建会失败，结果不可信。
 }
 
+// 给 td-hud 目录里的二进制加系统级不可变锁（SF_IMMUTABLE），
+// 防止设备上的还原守护进程 / App 自拷贝把我们部署的新程序覆盖成旧版。
+// 需要 root；解除锁用 -unprotect 参数。
+static void TDProtectSelfBinary(BOOL unprotect)
+{
+    uint32_t size = 0;
+    _NSGetExecutablePath(NULL, &size);
+    if (size == 0) return;
+    char path[1024];
+    if (_NSGetExecutablePath(path, &size) != 0) return;
+    if (!strstr(path, "td-hud")) return;   // 只保护 td-hud 副本
+
+    unsigned int flags = unprotect ? 0u : (unsigned int)(SF_IMMUTABLE | UF_IMMUTABLE);
+    int ret = chflags(path, flags);
+    TDLog(@"二进制保护%@ ret=%d path=%s", unprotect ? @"解除" : @"设置", ret, path);
+}
+
 int main(int argc, char *argv[])
 {
     @autoreleasepool {
         if (argc <= 1)
             return UIApplicationMain(argc, argv, @"MainApplication", @"MainApplicationDelegate");
 
-        if (strcmp(argv[1], "-hud") == 0)
+        if (strcmp(argv[1], "-unprotect") == 0) {
+            TDProtectSelfBinary(YES);
+            return EXIT_SUCCESS;
+        }
+        if (strcmp(argv[1], "-hud") == 0) {
+            TDProtectSelfBinary(NO);
             return TDRunHUD();
+        }
         if (strcmp(argv[1], "-probe") == 0) {
             gTDProbeMode = YES;
             return TDRunHUD();

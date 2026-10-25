@@ -359,6 +359,8 @@ static void TDHandleLockStateChanged(CFNotificationCenterRef center,
     __weak typeof(self) weakSelf = self;
     dispatch_async(_workQueue, ^{
         TDResult *r = [[TDEngine shared] recognizeRect:fbRect debugPath:nil];
+        TDLog(@"测试识别结果：status=%ld detail=%@ 截屏%.0fms",
+              (long)r.status, r.detail ?: @"（无）", r.captureMs);
         dispatch_async(dispatch_get_main_queue(), ^{
             typeof(self) strongSelf = weakSelf;
             if (!strongSelf) return;

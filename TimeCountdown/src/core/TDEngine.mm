@@ -30,6 +30,8 @@ static TDRenderDisplayFn td_render_display = NULL;
 static int   (*td_iomfb_getmain)(void **) = NULL;
 static int   (*td_iomfb_open)(void *, void *, unsigned int, void **) = NULL;
 static int   (*td_iomfb_getlayer)(void *, int, void **) = NULL;
+static int   (*td_iomfb_swapbegin)(void *, int *) = NULL;
+static int   (*td_iomfb_swapend)(void *) = NULL;
 static bool  td_iomfb_ready = false;
 static TDIOSurfaceRef (*td_surface_lookup)(uint32_t) = NULL;
 
@@ -43,6 +45,8 @@ static bool TDLoadFramebufferSymbols(void)
         td_iomfb_getmain  = (int (*)(void **))dlsym(h, "IOMobileFramebufferGetMainDisplay");
         td_iomfb_open     = (int (*)(void *, void *, unsigned int, void **))dlsym(h, "IOMobileFramebufferOpen");
         td_iomfb_getlayer = (int (*)(void *, int, void **))dlsym(h, "IOMobileFramebufferGetLayerDefaultSurface");
+        td_iomfb_swapbegin= (int (*)(void *, int *))dlsym(h, "IOMobileFramebufferSwapBegin");
+        td_iomfb_swapend  = (int (*)(void *))dlsym(h, "IOMobileFramebufferSwapEnd");
         td_iomfb_ready = (td_iomfb_getmain && td_iomfb_open && td_iomfb_getlayer);
     });
     return td_iomfb_ready;
@@ -476,9 +480,10 @@ static NSInteger TDParseRemaining(NSString *text)
                     [out appendFormat:@"已保存 IOMFB 整屏图到 %@\n", path];
                 }
                 CGImageRelease(fbImg);
-            } else {
-                [out appendFormat:@"IOMFB直读: 失败（耗时%.0fms）\n", tfms];
-            }
+        } else {
+            [out appendFormat:@"IOMFB直读: 失败（耗时%.0fms）\n", tfms];
+            [out appendFormat:@"注册表属性: %@\n", TDDumpDisplayRegistryKeys()];
+        }
         } else {
             [out appendString:@"IOMFB直读: 符号加载失败\n"];
         }
@@ -605,6 +610,31 @@ static NSInteger TDParseRemaining(NSString *text)
     return TDLoadFramebufferSymbols();
 }
 
+// 转储显示服务（AppleCLCD）的全部 IORegistry 属性名，用于诊断
+static NSString *TDDumpDisplayRegistryKeys(void)
+{
+    void *iok = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY | RTLD_LOCAL);
+    if (!iok) return @"IOKit 打不开";
+    mach_port_t (*svcGet)(mach_port_t, void *) =
+        (mach_port_t (*)(mach_port_t, void *))dlsym(iok, "IOServiceGetMatchingService");
+    void *(*svcMatch)(const char *) = (void *(*)(const char *))dlsym(iok, "IOServiceMatching");
+    kern_return_t (*props)(void *, CFMutableDictionaryRef *, CFAllocatorRef, uint32_t) =
+        (kern_return_t (*)(void *, CFMutableDictionaryRef *, CFAllocatorRef, uint32_t))dlsym(iok, "IORegistryEntryCreateCFProperties");
+    kern_return_t (*rel)(void *) = (kern_return_t (*)(void *))dlsym(iok, "IOObjectRelease");
+    if (!svcGet || !svcMatch || !props) return @"IOKit 符号缺失";
+    void *svc = (void *)svcGet(0, svcMatch("AppleCLCD"));
+    if (!svc) return @"AppleCLCD 服务不存在";
+    CFMutableDictionaryRef dict = NULL;
+    kern_return_t kr = props(svc, &dict, NULL, 0);
+    if (rel) rel(svc);
+    if (kr != 0 || !dict) return [NSString stringWithFormat:@"属性读取失败 0x%x", kr];
+    NSArray *keys = [[(NSDictionary *)dict allKeys] sortedArrayUsingSelector:@selector(compare:)];
+    CFRelease(dict);
+    NSMutableString *ms = [NSMutableString string];
+    for (NSString *k in keys) [ms appendFormat:@"%@  ", k];
+    return ms;
+}
+
 // 直接从 IOMobileFramebuffer 读取当前屏幕合成 surface，
 // 拷贝出一份 CPU 可读的位图并转成 CGImage。失败返回 NULL。
 - (CGImageRef)captureFramebuffer
@@ -677,17 +707,23 @@ static NSInteger TDParseRemaining(NSString *text)
     if (conn && td_iomfb_getlayer) {
         static BOOL loggedGL = NO;
         void *surf = NULL;
-        int gl = -1;
+        int gl = -1, sbRet = -1;
+        int token = 0;
+        // 部分系统版本需要先 SwapBegin 绑定连接后才能查询 layer
+        if (td_iomfb_swapbegin)
+            sbRet = td_iomfb_swapbegin(conn, &token);
         for (int idx = 0; idx < 4; idx++) {
             surf = NULL;
             gl = td_iomfb_getlayer(conn, idx, &surf);
             if (gl == 0 && surf) {
                 s = (TDIOSurfaceRef)surf;
-                if (!loggedGL) { loggedGL = YES; TDLog(@"IOMFB GetLayer idx=%d 成功", idx); }
+                if (!loggedGL) { loggedGL = YES; TDLog(@"IOMFB GetLayer idx=%d 成功（SwapBegin=0x%x）", idx, sbRet); }
                 break;
             }
         }
-        if (!s && !loggedGL) { loggedGL = YES; TDLog(@"IOMFB GetLayer idx0-3 全部失败 ret=0x%x", gl); }
+        if (!s && !loggedGL) { loggedGL = YES; TDLog(@"IOMFB GetLayer idx0-3 全部失败 ret=0x%x SwapBegin=0x%x", gl, sbRet); }
+        if (td_iomfb_swapend && sbRet == 0)
+            td_iomfb_swapend(conn);
     }
     if (!s && td_surface_lookup && td_io_prop) {
         // 注册表兜底：读帧缓冲 surface 的 IOSurfaceID，再 IOSurfaceLookup
