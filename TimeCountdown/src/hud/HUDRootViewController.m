@@ -37,6 +37,7 @@ static void TDHandleLockStateChanged(CFNotificationCenterRef center,
     UILabel *_timeLabel;
     UILabel *_statusLabel;
     UIButton *_toggleBtn;
+    UIButton *_testBtn;
     UIButton *_closeBtn;
 
     NSTimer *_timer;
@@ -104,6 +105,10 @@ static void TDHandleLockStateChanged(CFNotificationCenterRef center,
     _toggleBtn = [self makeHudButton:@"⏸" action:@selector(toggleRecognition)];
     [_container addSubview:_toggleBtn];
 
+    _testBtn = [self makeHudButton:@"测" action:@selector(runOneTest)];
+    _testBtn.backgroundColor = [UIColor colorWithRed:0.30 green:0.55 blue:1.0 alpha:0.30];
+    [_container addSubview:_testBtn];
+
     _closeBtn = [self makeHudButton:@"✕" action:@selector(closeHUD)];
     _closeBtn.backgroundColor = [UIColor colorWithWhite:0.2 alpha:0.45];
     [_container addSubview:_closeBtn];
@@ -125,7 +130,7 @@ static void TDHandleLockStateChanged(CFNotificationCenterRef center,
 - (UIButton *)makeHudButton:(NSString *)title action:(SEL)action
 {
     UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
-    b.layer.cornerRadius = 11.0;
+    b.layer.cornerRadius = 10.0;
     b.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.16];
     b.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightSemibold];
     b.tintColor = [UIColor whiteColor];
@@ -168,8 +173,10 @@ static void TDHandleLockStateChanged(CFNotificationCenterRef center,
     }
 
     CGFloat btnX = _container.bounds.size.width - btnCol - 2.0;
-    _toggleBtn.frame = CGRectMake(btnX, 8.0, 22.0, 22.0);
-    _closeBtn.frame = CGRectMake(btnX, _container.bounds.size.height - 30.0, 22.0, 22.0);
+    CGFloat btnH = 20.0;
+    _toggleBtn.frame = CGRectMake(btnX, 6.0, btnH, btnH);
+    _testBtn.frame = CGRectMake(btnX, round((_container.bounds.size.height - btnH) / 2.0), btnH, btnH);
+    _closeBtn.frame = CGRectMake(btnX, _container.bounds.size.height - btnH - 6.0, btnH, btnH);
 
     _container.layer.borderWidth = cfg.debugBorder ? 1.0 : 0.0;
 
@@ -329,6 +336,44 @@ static void TDHandleLockStateChanged(CFNotificationCenterRef center,
     TDLog(@"用户点悬浮窗关闭按钮，退出 HUD 进程");
     dispatch_async(dispatch_get_main_queue(), ^{
         exit(0);
+    });
+}
+
+- (void)runOneTest
+{
+    if (_busy) return;
+    _busy = YES;
+    [self setStatusText:@"测试识别中…"];
+    TDLog(@"用户点悬浮窗按钮：测试识别");
+
+    CGSize fb = [[TDEngine shared] screenFramebufferSize];
+    CGRect fbRect = [[TDConfig shared] framebufferRectForCaptureSize:fb];
+
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(_workQueue, ^{
+        TDResult *r = [[TDEngine shared] recognizeRect:fbRect debugPath:nil];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf) return;
+            strongSelf->_busy = NO;
+            switch (r.status) {
+                case TDStatusOK:
+                    [strongSelf setStatusText:[NSString stringWithFormat:
+                        @"✅ 识别成功: %@（剩 %ld 秒）", [r displayTime], (long)r.remaining]];
+                    break;
+                case TDStatusNoText:
+                    [strongSelf setStatusText:[NSString stringWithFormat:
+                        @"⚠️ 区域内没文字（OCR %.0fms）", r.ocrMs]];
+                    break;
+                case TDStatusParseFailed:
+                    [strongSelf setStatusText:[NSString stringWithFormat:
+                        @"⚠️ 读到「%@」但不是倒计时", r.text ?: @""]];
+                    break;
+                default:
+                    [strongSelf setStatusText:@"❌ 截屏失败"];
+                    break;
+            }
+        });
     });
 }
 
